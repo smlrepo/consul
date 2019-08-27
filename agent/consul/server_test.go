@@ -42,7 +42,17 @@ func testServerConfig(t *testing.T) (string, *Config) {
 	dir := testutil.TempDir(t, "consul")
 	config := DefaultConfig()
 
-	ports := freeport.Get(3)
+	ports := freeport.Take(3)
+
+	returnPorts := func() {
+		// The method of plumbing this into the server shutdown hook doesn't
+		// cover all exit points, so we insulate this against multiple
+		// invocations and then it's safe to call it a bunch of times.
+		freeport.Return(ports)
+		config.NotifyShutdown = nil // self-erasing
+	}
+	config.NotifyShutdown = returnPorts
+
 	config.NodeName = uniqueNodeName(t.Name())
 	config.Bootstrap = true
 	config.Datacenter = "dc1"
@@ -56,6 +66,7 @@ func testServerConfig(t *testing.T) (string, *Config) {
 
 	nodeID, err := uuid.GenerateUUID()
 	if err != nil {
+		returnPorts()
 		t.Fatal(err)
 	}
 	config.NodeID = types.NodeID(nodeID)
@@ -111,6 +122,8 @@ func testServerConfig(t *testing.T) (string, *Config) {
 			"LeafCertTTL":    "72h",
 		},
 	}
+
+	config.NotifyShutdown = returnPorts
 
 	return dir, config
 }
@@ -168,6 +181,7 @@ func testServerWithConfig(t *testing.T, cb func(*Config)) (string, *Server) {
 
 		srv, err = newServer(config)
 		if err != nil {
+			config.NotifyShutdown()
 			os.RemoveAll(dir)
 			r.Fatalf("err: %v", err)
 		}

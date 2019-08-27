@@ -61,6 +61,10 @@ type TestAgent struct {
 	// when Shutdown() is called.
 	Config *config.RuntimeConfig
 
+	// returnPorts will put the ports claimed for the test back into the
+	// general freeport pool
+	returnPorts func()
+
 	// LogOutput is the sink for the logs. If nil, logs are written
 	// to os.Stderr.
 	LogOutput io.Writer
@@ -128,10 +132,25 @@ func (a *TestAgent) Start(t *testing.T) *TestAgent {
 		hclDataDir = `data_dir = "` + d + `"`
 	}
 
+	var successful bool // TODO: switch this to look for errors after sarah's PR is merged
+	defer func() {
+		if !successful && a.returnPorts != nil {
+			a.returnPorts()
+			a.returnPorts = nil
+		}
+	}()
+
 	var id string
 	for i := 10; i >= 0; i-- {
+		if a.returnPorts != nil {
+			a.returnPorts() // cleanup if looping
+			a.returnPorts = nil
+		}
+
+		portsConfig, returnPorts := randomPortsSource(a.UseTLS)
+		a.returnPorts = returnPorts
 		a.Config = TestConfig(
-			randomPortsSource(a.UseTLS),
+			portsConfig,
 			config.Source{Name: a.Name, Format: "hcl", Data: a.HCL},
 			config.Source{Name: a.Name + ".data_dir", Format: "hcl", Data: hclDataDir},
 		)
@@ -227,6 +246,7 @@ func (a *TestAgent) Start(t *testing.T) *TestAgent {
 	})
 	a.dns = a.dnsServers[0]
 	a.srv = a.httpServers[0]
+	successful = true
 	return a
 }
 
@@ -242,6 +262,14 @@ func (a *TestAgent) Shutdown() error {
 			os.RemoveAll(a.DataDir)
 		}
 	}()*/
+
+	// Return ports last of all
+	defer func() {
+		if a.returnPorts != nil {
+			a.returnPorts()
+			a.returnPorts = nil
+		}
+	}()
 
 	// shutdown agent before endpoints
 	defer a.Agent.ShutdownEndpoints()
@@ -303,27 +331,32 @@ func (a *TestAgent) consulConfig() *consul.Config {
 // chance of port conflicts for concurrently executed test binaries.
 // Instead of relying on one set of ports to be sufficient we retry
 // starting the agent with different ports on port conflict.
-func randomPortsSource(tls bool) config.Source {
-	ports := freeport.Get(6)
+func randomPortsSource(tls bool) (config.Source, func()) {
+	ports := freeport.Take(6)
+
+	var http, https int
 	if tls {
-		ports[1] = -1
+		http = -1
+		https = ports[2]
 	} else {
-		ports[2] = -1
+		http = ports[1]
+		https = -1
 	}
+
 	return config.Source{
 		Name:   "ports",
 		Format: "hcl",
 		Data: `
 			ports = {
 				dns = ` + strconv.Itoa(ports[0]) + `
-				http = ` + strconv.Itoa(ports[1]) + `
-				https = ` + strconv.Itoa(ports[2]) + `
+				http = ` + strconv.Itoa(http) + `
+				https = ` + strconv.Itoa(https) + `
 				serf_lan = ` + strconv.Itoa(ports[3]) + `
 				serf_wan = ` + strconv.Itoa(ports[4]) + `
 				server = ` + strconv.Itoa(ports[5]) + `
 			}
 		`,
-	}
+	}, func() { freeport.Return(ports) }
 }
 
 func NodeID() string {
