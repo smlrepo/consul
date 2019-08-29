@@ -23,7 +23,7 @@ func TestIntervalOverlap(t *testing.T) {
 			if tc.overlap != intervalOverlap(tc.min1, tc.max1, tc.min2, tc.max2) { // 1 vs 2
 				t.Fatalf("expected %v but got %v", tc.overlap, !tc.overlap)
 			}
-			if tc.overlap != intervalOverlap(tc.min2, tc.max2, tc.min1, tc.max1) { // 2 vs 2
+			if tc.overlap != intervalOverlap(tc.min2, tc.max2, tc.min1, tc.max1) { // 2 vs 1
 				t.Fatalf("expected %v but got %v", tc.overlap, !tc.overlap)
 			}
 		})
